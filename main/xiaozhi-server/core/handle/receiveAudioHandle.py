@@ -8,6 +8,7 @@ if TYPE_CHECKING:
 from core.utils.util import audio_to_data
 from core.handle.abortHandle import handleAbortMessage
 from core.handle.intentHandler import handle_user_intent
+from core.handle.prefilterHandler import try_prefilter_route
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_stt_message, SentenceType
 
@@ -82,6 +83,10 @@ async def startToChat(conn: "ConnectionHandler", text):
     # manual 模式下不打断正在播放的内容
     if conn.client_is_speaking and conn.client_listen_mode != "manual":
         await handleAbortMessage(conn)
+
+    # 在常规意图识别前先尝试前置工具路由（如血糖查询）
+    if await try_prefilter_route(conn, actual_text):
+        return
 
     # 首先进行意图分析，使用实际文本内容
     intent_handled = await handle_user_intent(conn, actual_text)

@@ -578,3 +578,10 @@ databaseChangeLog:
         - sqlFile:
             encoding: utf8
             path: classpath:db/changelog/202603231037.sql
+  - changeSet:
+      id: 202603261600
+      author: Copilot
+      changes:
+        - sqlFile:
+            encoding: utf8
+            path: classpath:db/changelog/202603261600.sql

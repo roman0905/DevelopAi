@@ -4,7 +4,10 @@ version: '3'
 services:
   # Server模块
   xiaozhi-esp32-server:
-    image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:server_latest
+    # image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:server_latest
+    build:
+      context: ../../
+      dockerfile: Dockerfile-server
     container_name: xiaozhi-esp32-server
     depends_on:
       - xiaozhi-esp32-server-db
@@ -29,7 +32,10 @@ services:
 
   # manager-api和manager-web模块
   xiaozhi-esp32-server-web:
-    image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:web_latest
+    # image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:web_latest
+    build: 
+      context: ../../
+      dockerfile: Dockerfile-web
     container_name: xiaozhi-esp32-server-web
     restart: always
     networks:
@@ -44,6 +50,7 @@ services:
       - "8002:8002"
     environment:
       - TZ=Asia/Shanghai
+      - SPRING_LIQUIBASE_ENABLED=true
       - SPRING_DATASOURCE_DRUID_URL=jdbc:mysql://xiaozhi-esp32-server-db:3306/xiaozhi_esp32_server?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&nullCatalogMeansCurrent=true&connectTimeout=30000&socketTimeout=30000&autoReconnect=true&failOverReadOnly=false&maxReconnects=10
       - SPRING_DATASOURCE_DRUID_USERNAME=root
       - SPRING_DATASOURCE_DRUID_PASSWORD=123456
@@ -73,7 +80,7 @@ services:
       - TZ=Asia/Shanghai
       - MYSQL_ROOT_PASSWORD=123456
       - MYSQL_DATABASE=xiaozhi_esp32_server
-      - MYSQL_INITDB_ARGS="--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci"
+      - MYSQL_INITDB_ARGS=--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
   # redis模块
   xiaozhi-esp32-server-redis:
     image: redis:8.0
@@ -86,6 +93,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - default
+  # 新增：测试页面专用 Nginx 服务
+  xiaozhi-test-page:
+    image: nginx:alpine
+    container_name: xiaozhi-test-page
+    restart: always
+    ports:
+      # 将服务器的 8006 端口映射到 Nginx 容器的 80 端口
+      - "8006:80"
+    volumes:
+      # 将当前目录下的 test 文件夹映射为 Nginx 的网页根目录（:ro 表示只读，更安全）
+      - ./test:/usr/share/nginx/html:ro
     networks:
       - default
 networks:
