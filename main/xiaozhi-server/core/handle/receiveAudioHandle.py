@@ -11,6 +11,7 @@ from core.handle.intentHandler import handle_user_intent
 from core.handle.prefilterHandler import try_prefilter_route
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_stt_message, SentenceType
+from core.utils.latency_trace import mark_stage
 
 TAG = __name__
 
@@ -42,6 +43,7 @@ async def resume_vad_detection(conn: "ConnectionHandler"):
 
 
 async def startToChat(conn: "ConnectionHandler", text):
+    mark_stage(conn, "start_to_chat.enter")
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     language_tag = None
@@ -85,11 +87,16 @@ async def startToChat(conn: "ConnectionHandler", text):
         await handleAbortMessage(conn)
 
     # 在常规意图识别前先尝试前置工具路由（如血糖查询）
+    mark_stage(conn, "prefilter.enter")
     if await try_prefilter_route(conn, actual_text):
+        mark_stage(conn, "prefilter.routed")
         return
+    mark_stage(conn, "prefilter.miss")
 
     # 首先进行意图分析，使用实际文本内容
+    mark_stage(conn, "intent.analyze.start")
     intent_handled = await handle_user_intent(conn, actual_text)
+    mark_stage(conn, "intent.analyze.end", handled=bool(intent_handled))
 
     if intent_handled:
         # 如果意图已被处理，不再进行聊天
@@ -97,6 +104,8 @@ async def startToChat(conn: "ConnectionHandler", text):
 
     # 意图未被处理，继续常规聊天流程，使用实际文本内容
     await send_stt_message(conn, actual_text)
+    mark_stage(conn, "stt.sent")
+    mark_stage(conn, "chat.submit")
     conn.executor.submit(conn.chat, actual_text)
 
 

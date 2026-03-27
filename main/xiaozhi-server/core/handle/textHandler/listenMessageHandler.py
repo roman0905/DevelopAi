@@ -1,5 +1,6 @@
 import time
 import asyncio
+import re
 from typing import Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -12,6 +13,7 @@ from core.handle.textMessageHandler import TextMessageHandler
 from core.handle.textMessageType import TextMessageType
 from core.utils.util import remove_punctuation_and_length
 from core.providers.asr.dto.dto import InterfaceType
+from core.utils.latency_trace import begin_turn, mark_stage
 
 TAG = __name__
 
@@ -47,9 +49,24 @@ class ListenTextMessageHandler(TextMessageHandler):
         elif msg_json["state"] == "detect":
             conn.client_have_voice = False
             conn.reset_audio_states()
+
+            # 同步 listen 消息中的手机号到连接上下文，供前置血糖路由和插件读取。
+            listen_phone_number = msg_json.get("phone_number")
+            if listen_phone_number:
+                if re.match(r"^1[3-9]\d{9}$", listen_phone_number):
+                    if conn.headers is None:
+                        conn.headers = {}
+                    conn.headers["phone_number"] = listen_phone_number
+                else:
+                    conn.logger.bind(tag=TAG).warning(
+                        f"listen消息携带无效手机号，忽略: {listen_phone_number}"
+                    )
+
             if "text" in msg_json:
                 conn.last_activity_time = time.time() * 1000
                 original_text = msg_json["text"]  # 保留原始文本
+                begin_turn(conn, original_text, source="listen.detect")
+                mark_stage(conn, "listen.detect.text_ready")
                 filtered_len, filtered_text = remove_punctuation_and_length(
                     original_text
                 )
