@@ -3,6 +3,7 @@
 import json
 from typing import Dict, List, Any, Optional
 from config.logger import setup_logging
+from core.utils.latency_monitor import get_monitor
 from plugins_func.loadplugins import auto_import_modules
 
 from .base import ToolType
@@ -140,6 +141,11 @@ class UnifiedToolHandler:
     ) -> Optional[ActionResponse]:
         """处理LLM函数调用"""
         try:
+            # 记录工具调用耗时
+            monitor = get_monitor()
+            tool_name = function_call_data.get("name", "unknown")
+            monitor.start_timer(conn.session_id, f"工具调用: {tool_name}")
+            
             # 处理多函数调用
             if "function_calls" in function_call_data:
                 responses = []
@@ -148,31 +154,52 @@ class UnifiedToolHandler:
                         call["name"], call.get("arguments", {})
                     )
                     responses.append(result)
-                return self._combine_responses(responses)
+                result = self._combine_responses(responses)
+            else:
+                # 处理单函数调用
+                function_name = function_call_data["name"]
+                arguments = function_call_data.get("arguments", {})
 
-            # 处理单函数调用
-            function_name = function_call_data["name"]
-            arguments = function_call_data.get("arguments", {})
+                # 如果arguments是字符串，尝试解析为JSON
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments) if arguments else {}
+                    except json.JSONDecodeError:
+                        self.logger.error(f"无法解析函数参数: {arguments}")
+                        result = ActionResponse(
+                            action=Action.ERROR,
+                            response="无法解析函数参数",
+                        )
+                        return result
 
-            # 如果arguments是字符串，尝试解析为JSON
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments) if arguments else {}
-                except json.JSONDecodeError:
-                    self.logger.error(f"无法解析函数参数: {arguments}")
-                    return ActionResponse(
-                        action=Action.ERROR,
-                        response="无法解析函数参数",
-                    )
+                self.logger.debug(f"调用函数: {function_name}, 参数: {arguments}")
 
-            self.logger.debug(f"调用函数: {function_name}, 参数: {arguments}")
-
-            # 执行工具调用
-            result = await self.tool_manager.execute_tool(function_name, arguments)
+                # 执行工具调用
+                result = await self.tool_manager.execute_tool(function_name, arguments)
+            
+            # 记录工具调用完成
+            monitor.end_timer(
+                conn.session_id,
+                f"工具调用: {tool_name}",
+                getattr(conn, "sentence_id", "unknown"),
+                details=tool_name,
+            )
             return result
 
         except Exception as e:
             self.logger.error(f"处理function call错误: {e}")
+            # 记录异常时的工具调用耗时
+            try:
+                monitor = get_monitor()
+                tool_name = function_call_data.get("name", "unknown")
+                monitor.end_timer(
+                    conn.session_id,
+                    f"工具调用: {tool_name}",
+                    getattr(conn, "sentence_id", "unknown"),
+                    details=tool_name,
+                )
+            except:
+                pass
             return ActionResponse(action=Action.ERROR, response=str(e))
 
     def _combine_responses(self, responses: List[ActionResponse]) -> ActionResponse:

@@ -10,6 +10,7 @@ from core.http_server import SimpleHttpServer
 from core.websocket_server import WebSocketServer
 from core.utils.util import check_ffmpeg_installed
 from core.utils.gc_manager import get_gc_manager
+from core.utils.latency_monitor import init_monitor
 
 TAG = __name__
 logger = setup_logging()
@@ -45,6 +46,11 @@ async def monitor_stdin():
 
 async def main():
     check_ffmpeg_installed()
+    
+    # 初始化延迟监控系统，日志输出到项目tmp目录
+    monitor = init_monitor(tmp_dir="tmp")
+    logger.bind(tag=TAG).info("链路耗时监控已启动，日志目录: tmp")
+
     config = load_config()
 
     # auth_key优先级：配置文件server.auth_key > manager-api.secret > 自动生成
@@ -129,6 +135,14 @@ async def main():
     finally:
         # 停止全局GC管理器
         await gc_manager.stop()
+
+        # 输出延迟监控汇总
+        try:
+            monitor.generate_summary(output_format="all")
+            monitor.print_summary_to_console()
+            logger.bind(tag=TAG).info("链路耗时汇总已输出到 /tmp")
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"输出耗时汇总失败: {e}")
 
         # 取消所有任务（关键修复点）
         stdin_task.cancel()

@@ -17,6 +17,7 @@ from core.utils.util import (
     check_asr_update,
     filter_sensitive_info,
 )
+from core.utils.latency_monitor import get_monitor
 from typing import Dict, Any
 from collections import deque
 from core.utils.modules_initialize import (
@@ -945,6 +946,11 @@ class ConnectionHandler:
                 )
                 memory_str = future.result()
 
+            # 开始计时LLM耗时
+            monitor = get_monitor()
+            monitor.set_turn_id(self.sentence_id)
+            monitor.start_timer(self.session_id, "LLM推理")
+
             if self.intent_type == "function_call" and functions is not None:
                 # 使用支持functions的streaming接口
                 llm_responses = self.llm.response_with_functions(
@@ -963,6 +969,12 @@ class ConnectionHandler:
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
+            # 记录异常时的LLM耗时
+            try:
+                monitor = get_monitor()
+                monitor.end_timer(self.session_id, "LLM推理", self.sentence_id)
+            except:
+                pass
             return None
 
         # 处理流式响应
@@ -1015,6 +1027,12 @@ class ConnectionHandler:
                         )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
+            # 记录异常时的LLM耗时
+            try:
+                monitor = get_monitor()
+                monitor.end_timer(self.session_id, "LLM推理", self.sentence_id)
+            except:
+                pass
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=self.sentence_id,
@@ -1032,6 +1050,14 @@ class ConnectionHandler:
                     )
                 )
             return
+        
+        # LLM流式响应处理完成，记录耗时
+        try:
+            monitor = get_monitor()
+            monitor.end_timer(self.session_id, "LLM推理", self.sentence_id)
+        except:
+            pass
+        
         # 处理function call
         if tool_call_flag:
             bHasError = False

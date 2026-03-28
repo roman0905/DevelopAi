@@ -7,6 +7,7 @@ import threading
 import traceback
 
 from core.utils import p3
+from core.utils.latency_monitor import get_monitor
 from datetime import datetime
 from core.utils import textUtils
 from typing import Callable, Any
@@ -86,105 +87,132 @@ class TTSProviderBase(ABC):
 
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
         text = MarkdownCleaner.clean_markdown(text)
+
+        # 记录TTS耗时
+        monitor = get_monitor()
+        if hasattr(self, "conn") and self.conn:
+            monitor.set_turn_id(getattr(self.conn, "sentence_id", "unknown"))
+            monitor.start_timer(self.conn.session_id, "TTS合成")
+
         max_repeat_time = 5
-        if self.delete_audio_file:
-            # 需要删除文件的直接转为音频数据
-            while max_repeat_time > 0:
-                try:
-                    audio_bytes = asyncio.run(self.text_to_speak(text, None))
-                    if audio_bytes:
-                        self.tts_audio_queue.put((SentenceType.FIRST, None, text))
-                        audio_bytes_to_data_stream(
-                            audio_bytes,
-                            file_type=self.audio_file_type,
-                            is_opus=True,
-                            callback=opus_handler,
-                            sample_rate=self.conn.sample_rate,
-                            opus_encoder=self.opus_encoder,
-                        )
-                        break
-                    else:
-                        max_repeat_time -= 1
-                except Exception as e:
-                    logger.bind(tag=TAG).warning(
-                        f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
-                    )
-                    max_repeat_time -= 1
-            if max_repeat_time > 0:
-                logger.bind(tag=TAG).info(
-                    f"语音生成成功: {text}，重试{5 - max_repeat_time}次"
-                )
-            else:
-                logger.bind(tag=TAG).error(
-                    f"语音生成失败: {text}，请检查网络或服务是否正常"
-                )
-            return None
-        else:
-            tmp_file = self.generate_filename()
-            try:
-                while not os.path.exists(tmp_file) and max_repeat_time > 0:
+        try:
+            if self.delete_audio_file:
+                # 需要删除文件的直接转为音频数据
+                while max_repeat_time > 0:
                     try:
-                        asyncio.run(self.text_to_speak(text, tmp_file))
+                        audio_bytes = asyncio.run(self.text_to_speak(text, None))
+                        if audio_bytes:
+                            self.tts_audio_queue.put((SentenceType.FIRST, None, text))
+                            audio_bytes_to_data_stream(
+                                audio_bytes,
+                                file_type=self.audio_file_type,
+                                is_opus=True,
+                                callback=opus_handler,
+                                sample_rate=self.conn.sample_rate,
+                                opus_encoder=self.opus_encoder,
+                            )
+                            break
+                        else:
+                            max_repeat_time -= 1
                     except Exception as e:
                         logger.bind(tag=TAG).warning(
                             f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
                         )
-                        # 未执行成功，删除文件
-                        if os.path.exists(tmp_file):
-                            os.remove(tmp_file)
                         max_repeat_time -= 1
-
                 if max_repeat_time > 0:
                     logger.bind(tag=TAG).info(
-                        f"语音生成成功: {text}:{tmp_file}，重试{5 - max_repeat_time}次"
+                        f"语音生成成功: {text}，重试{5 - max_repeat_time}次"
                     )
                 else:
                     logger.bind(tag=TAG).error(
                         f"语音生成失败: {text}，请检查网络或服务是否正常"
                     )
-                self.tts_audio_queue.put((SentenceType.FIRST, None, text))
-                self._process_audio_file_stream(tmp_file, callback=opus_handler)
-            except Exception as e:
-                logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
-                return None
-    
+            else:
+                tmp_file = self.generate_filename()
+                try:
+                    while not os.path.exists(tmp_file) and max_repeat_time > 0:
+                        try:
+                            asyncio.run(self.text_to_speak(text, tmp_file))
+                        except Exception as e:
+                            logger.bind(tag=TAG).warning(
+                                f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
+                            )
+                            # 未执行成功，删除文件
+                            if os.path.exists(tmp_file):
+                                os.remove(tmp_file)
+                            max_repeat_time -= 1
+
+                    if max_repeat_time > 0:
+                        logger.bind(tag=TAG).info(
+                            f"语音生成成功: {text}:{tmp_file}，重试{5 - max_repeat_time}次"
+                        )
+                    else:
+                        logger.bind(tag=TAG).error(
+                            f"语音生成失败: {text}，请检查网络或服务是否正常"
+                        )
+                    self.tts_audio_queue.put((SentenceType.FIRST, None, text))
+                    self._process_audio_file_stream(tmp_file, callback=opus_handler)
+                except Exception as e:
+                    logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
+        finally:
+            # 记录TTS完成
+            if hasattr(self, "conn") and self.conn:
+                try:
+                    monitor.end_timer(
+                        self.conn.session_id,
+                        "TTS合成",
+                        getattr(self.conn, "sentence_id", "unknown"),
+                        details="语音合成",
+                    )
+                except Exception:
+                    pass
+
     def to_tts(self, text):
         text = MarkdownCleaner.clean_markdown(text)
+
+        # 记录TTS耗时
+        monitor = get_monitor()
+        if hasattr(self, "conn") and self.conn:
+            monitor.set_turn_id(getattr(self.conn, "sentence_id", "unknown"))
+            monitor.start_timer(self.conn.session_id, "TTS合成")
+
         max_repeat_time = 5
-        if self.delete_audio_file:
-            # 需要删除文件的直接转为音频数据
-            while max_repeat_time > 0:
-                try:
-                    audio_bytes = asyncio.run(self.text_to_speak(text, None))
-                    if audio_bytes:
-                        audio_datas = []
-                        audio_bytes_to_data_stream(
-                            audio_bytes,
-                            file_type=self.audio_file_type,
-                            is_opus=True,
-                            callback=lambda data: audio_datas.append(data),
-                            sample_rate=self.conn.sample_rate,
+        result = None
+        try:
+            if self.delete_audio_file:
+                # 需要删除文件的直接转为音频数据
+                while max_repeat_time > 0:
+                    try:
+                        audio_bytes = asyncio.run(self.text_to_speak(text, None))
+                        if audio_bytes:
+                            audio_datas = []
+                            audio_bytes_to_data_stream(
+                                audio_bytes,
+                                file_type=self.audio_file_type,
+                                is_opus=True,
+                                callback=lambda data: audio_datas.append(data),
+                                sample_rate=self.conn.sample_rate,
+                            )
+                            result = audio_datas
+                            break
+                        else:
+                            max_repeat_time -= 1
+                    except Exception as e:
+                        logger.bind(tag=TAG).warning(
+                            f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
                         )
-                        return audio_datas
-                    else:
                         max_repeat_time -= 1
-                except Exception as e:
-                    logger.bind(tag=TAG).warning(
-                        f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
+
+                if result:
+                    logger.bind(tag=TAG).info(
+                        f"语音生成成功: {text}，重试{5 - max_repeat_time}次"
                     )
-                    max_repeat_time -= 1
-            if max_repeat_time > 0:
-                logger.bind(tag=TAG).info(
-                    f"语音生成成功: {text}，重试{5 - max_repeat_time}次"
-                )
+                else:
+                    logger.bind(tag=TAG).error(
+                        f"语音生成失败: {text}，请检查网络或服务是否正常"
+                    )
             else:
-                logger.bind(tag=TAG).error(
-                    f"语音生成失败: {text}，请检查网络或服务是否正常"
-                )
-            return None
-        else:
-            tmp_file = self.generate_filename()
-            try:
+                tmp_file = self.generate_filename()
                 while not os.path.exists(tmp_file) and max_repeat_time > 0:
                     try:
                         asyncio.run(self.text_to_speak(text, tmp_file))
@@ -201,15 +229,27 @@ class TTSProviderBase(ABC):
                     logger.bind(tag=TAG).info(
                         f"语音生成成功: {text}:{tmp_file}，重试{5 - max_repeat_time}次"
                     )
+                    result = tmp_file
                 else:
                     logger.bind(tag=TAG).error(
                         f"语音生成失败: {text}，请检查网络或服务是否正常"
                     )
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
+        finally:
+            # 记录TTS完成
+            if hasattr(self, "conn") and self.conn:
+                try:
+                    monitor.end_timer(
+                        self.conn.session_id,
+                        "TTS合成",
+                        getattr(self.conn, "sentence_id", "unknown"),
+                        details="语音合成",
+                    )
+                except Exception:
+                    pass
 
-                return tmp_file
-            except Exception as e:
-                logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
-                return None
+        return result
 
     @abstractmethod
     async def text_to_speak(self, text, output_file):

@@ -14,6 +14,7 @@ import opuslib_next
 
 from abc import ABC, abstractmethod
 from config.logger import setup_logging
+from core.utils.latency_monitor import get_monitor
 from core.providers.asr.dto.dto import InterfaceType
 from core.handle.receiveAudioHandle import startToChat
 from core.handle.reportHandle import enqueue_asr_report
@@ -84,6 +85,11 @@ class ASRProviderBase(ABC):
     async def handle_voice_stop(self, conn: "ConnectionHandler", asr_audio_task: List[bytes]):
         """并行处理ASR和声纹识别"""
         try:
+            # 记录ASR耗时
+            monitor = get_monitor()
+            monitor.set_turn_id(getattr(conn, "sentence_id", "unknown"))
+            monitor.start_timer(conn.session_id, "ASR处理")
+            
             total_start_time = time.monotonic()
 
             # 准备音频数据
@@ -161,7 +167,15 @@ class ASRProviderBase(ABC):
 
             # 性能监控
             total_time = time.monotonic() - total_start_time
-            logger.bind(tag=TAG).debug(f"总处理耗时: {total_time:.3f}s")
+            logger.bind(tag=TAG).debug(f"ASR总处理耗时: {total_time:.3f}s")
+            
+            # 记录ASR完成
+            monitor.end_timer(
+                conn.session_id,
+                "ASR处理",
+                getattr(conn, "sentence_id", "unknown"),
+                details="语音识别",
+            )
 
             # 检查文本长度
             text_len, _ = remove_punctuation_and_length(content_for_length_check)
@@ -174,6 +188,17 @@ class ASRProviderBase(ABC):
                 enqueue_asr_report(conn, enhanced_text, audio_snapshot)
         except Exception as e:
             logger.bind(tag=TAG).error(f"处理语音停止失败: {e}")
+            # 记录异常时的ASR耗时
+            try:
+                monitor = get_monitor()
+                monitor.end_timer(
+                    conn.session_id,
+                    "ASR处理",
+                    getattr(conn, "sentence_id", "unknown"),
+                    details="语音识别",
+                )
+            except:
+                pass
             import traceback
 
             logger.bind(tag=TAG).debug(f"异常详情: {traceback.format_exc()}")
