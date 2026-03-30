@@ -90,8 +90,10 @@ class TTSProviderBase(ABC):
 
         # 记录TTS耗时
         monitor = get_monitor()
+        active_turn_id = "unknown"
         if hasattr(self, "conn") and self.conn:
-            monitor.set_turn_id(getattr(self.conn, "sentence_id", "unknown"))
+            active_turn_id = getattr(self.conn, "turn_id", "unknown")
+            monitor.set_turn_id(active_turn_id)
             monitor.start_timer(self.conn.session_id, "TTS合成")
 
         max_repeat_time = 5
@@ -161,7 +163,7 @@ class TTSProviderBase(ABC):
                     monitor.end_timer(
                         self.conn.session_id,
                         "TTS合成",
-                        getattr(self.conn, "sentence_id", "unknown"),
+                        active_turn_id,
                         details="语音合成",
                     )
                 except Exception:
@@ -172,8 +174,10 @@ class TTSProviderBase(ABC):
 
         # 记录TTS耗时
         monitor = get_monitor()
+        active_turn_id = "unknown"
         if hasattr(self, "conn") and self.conn:
-            monitor.set_turn_id(getattr(self.conn, "sentence_id", "unknown"))
+            active_turn_id = getattr(self.conn, "turn_id", "unknown")
+            monitor.set_turn_id(active_turn_id)
             monitor.start_timer(self.conn.session_id, "TTS合成")
 
         max_repeat_time = 5
@@ -243,7 +247,7 @@ class TTSProviderBase(ABC):
                     monitor.end_timer(
                         self.conn.session_id,
                         "TTS合成",
-                        getattr(self.conn, "sentence_id", "unknown"),
+                        active_turn_id,
                         details="语音合成",
                     )
                 except Exception:

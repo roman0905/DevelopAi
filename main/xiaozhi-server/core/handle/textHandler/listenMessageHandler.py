@@ -13,7 +13,7 @@ from core.handle.textMessageHandler import TextMessageHandler
 from core.handle.textMessageType import TextMessageType
 from core.utils.util import remove_punctuation_and_length
 from core.providers.asr.dto.dto import InterfaceType
-from core.utils.latency_trace import begin_turn, mark_stage
+from core.utils.latency_trace import mark_stage
 
 TAG = __name__
 
@@ -65,8 +65,7 @@ class ListenTextMessageHandler(TextMessageHandler):
             if "text" in msg_json:
                 conn.last_activity_time = time.time() * 1000
                 original_text = msg_json["text"]  # 保留原始文本
-                begin_turn(conn, original_text, source="listen.detect")
-                mark_stage(conn, "listen.detect.text_ready")
+                mark_stage(conn, "listen.detect.text_ready", module="输入接收")
                 filtered_len, filtered_text = remove_punctuation_and_length(
                     original_text
                 )

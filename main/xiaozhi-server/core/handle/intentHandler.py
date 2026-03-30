@@ -12,6 +12,7 @@ from plugins_func.register import Action, ActionResponse
 from core.handle.sendAudioHandle import send_stt_message
 from core.utils.util import remove_punctuation_and_length
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
+from core.utils.latency_trace import start_stage, end_stage
 
 TAG = __name__
 
@@ -70,11 +71,14 @@ async def analyze_intent_with_llm(conn: "ConnectionHandler", text):
 
     # 对话历史记录
     dialogue = conn.dialogue
+    start_stage(conn, "intent.detect")
     try:
         intent_result = await conn.intent.detect_intent(conn, dialogue.dialogue, text)
+        end_stage(conn, "intent.detect", details="intent_llm")
         return intent_result
     except Exception as e:
         conn.logger.bind(tag=TAG).error(f"意图识别失败: {str(e)}")
+        end_stage(conn, "intent.detect", details="intent_llm_exception")
 
     return None
 

@@ -299,6 +299,7 @@ async def try_prefilter_route(conn: "ConnectionHandler", text: str) -> bool:
         "name": BLOOD_GLUCOSE_TOOL,
         "id": str(uuid.uuid4().hex),
         "arguments": json.dumps(tool_args, ensure_ascii=False),
+        "turn_id": getattr(conn, "turn_id", "unknown"),
     }
 
     def process_glucose_query() -> None:

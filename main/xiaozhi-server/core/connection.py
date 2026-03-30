@@ -179,6 +179,8 @@ class ConnectionHandler:
 
         # tts相关变量
         self.sentence_id = None
+        self.turn_id = None
+        self.turn_text_preview = ""
         # 处理TTS响应没有文本返回
         self.tts_MessageText = ""
 
@@ -936,20 +938,35 @@ class ConnectionHandler:
         if tool_call_reminder:
             self.dialogue.put(Message(role="user", content=tool_call_reminder, is_temporary=True))
 
+        monitor = get_monitor()
+        active_turn_id = getattr(self, "turn_id", None) or "unknown"
+        memory_timer_started = False
+        llm_timer_started = False
+
         try:
             # 使用带记忆的对话
             memory_str = None
             # 仅当query非空（代表用户询问）时查询记忆
             if self.memory is not None and query:
+                monitor.set_turn_id(active_turn_id)
+                monitor.start_timer(self.session_id, "memory.query")
+                memory_timer_started = True
                 future = asyncio.run_coroutine_threadsafe(
                     self.memory.query_memory(query), self.loop
                 )
                 memory_str = future.result()
+                monitor.end_timer(
+                    self.session_id,
+                    "memory.query",
+                    active_turn_id,
+                    details="query_memory",
+                )
+                memory_timer_started = False
 
             # 开始计时LLM耗时
-            monitor = get_monitor()
-            monitor.set_turn_id(self.sentence_id)
+            monitor.set_turn_id(active_turn_id)
             monitor.start_timer(self.session_id, "LLM推理")
+            llm_timer_started = True
 
             if self.intent_type == "function_call" and functions is not None:
                 # 使用支持functions的streaming接口
@@ -969,12 +986,21 @@ class ConnectionHandler:
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
-            # 记录异常时的LLM耗时
-            try:
-                monitor = get_monitor()
-                monitor.end_timer(self.session_id, "LLM推理", self.sentence_id)
-            except:
-                pass
+            if memory_timer_started:
+                try:
+                    monitor.end_timer(
+                        self.session_id,
+                        "memory.query",
+                        active_turn_id,
+                        details="query_memory_exception",
+                    )
+                except Exception:
+                    pass
+            if llm_timer_started:
+                try:
+                    monitor.end_timer(self.session_id, "LLM推理", active_turn_id)
+                except Exception:
+                    pass
             return None
 
         # 处理流式响应
@@ -1030,7 +1056,7 @@ class ConnectionHandler:
             # 记录异常时的LLM耗时
             try:
                 monitor = get_monitor()
-                monitor.end_timer(self.session_id, "LLM推理", self.sentence_id)
+                monitor.end_timer(self.session_id, "LLM推理", active_turn_id)
             except:
                 pass
             self.tts.tts_text_queue.put(
@@ -1054,7 +1080,7 @@ class ConnectionHandler:
         # LLM流式响应处理完成，记录耗时
         try:
             monitor = get_monitor()
-            monitor.end_timer(self.session_id, "LLM推理", self.sentence_id)
+            monitor.end_timer(self.session_id, "LLM推理", active_turn_id)
         except:
             pass
         
@@ -1112,6 +1138,7 @@ class ConnectionHandler:
                 # 收集所有工具调用的 Future
                 futures_with_data = []
                 for tool_call_data in tool_calls_list:
+                    tool_call_data.setdefault("turn_id", active_turn_id)
                     self.logger.bind(tag=TAG).debug(
                         f"function_name={tool_call_data['name']}, function_id={tool_call_data['id']}, function_arguments={tool_call_data['arguments']}"
                     )

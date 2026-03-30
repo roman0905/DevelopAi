@@ -157,13 +157,21 @@ class LatencyMonitor:
             
             if not self.timing_stack[conn_id]:
                 return 0
-            
-            # 弹出最后一个计时记录
-            timing = self.timing_stack[conn_id].pop()
-            
-            if timing["stage"] != stage_name:
-                # 栈不匹配，跳过
+
+            # 从栈顶向下查找匹配阶段，避免先pop导致状态破坏
+            stack = self.timing_stack[conn_id]
+            matched_index = None
+            for index in range(len(stack) - 1, -1, -1):
+                if stack[index]["stage"] == stage_name:
+                    matched_index = index
+                    break
+
+            if matched_index is None:
+                print(f"[延迟监控] end_timer未找到匹配阶段: conn={conn_id}, stage={stage_name}")
                 return 0
+
+            timing = stack[matched_index]
+            del stack[matched_index]
             
             start_time = timing["start"]
             elapsed_ms = end_time - start_time
@@ -264,7 +272,26 @@ class LatencyMonitor:
 
     def _parse_module(self, stage_name: str) -> str:
         """从阶段名称推断模块名称"""
-        if "ASR" in stage_name or "asr" in stage_name or "语音识别" in stage_name:
+        stage_lower = stage_name.lower()
+
+        if (
+            "listen" in stage_lower
+            or "detect.text_ready" in stage_lower
+            or "输入" in stage_name
+            or "接收" in stage_name
+        ):
+            return "输入接收"
+        elif "intent" in stage_lower or "detect" in stage_lower or "意图" in stage_name:
+            return "意图识别"
+        elif "memory" in stage_lower or "query_memory" in stage_lower or "记忆" in stage_name:
+            return "记忆查询"
+        elif "prefilter" in stage_lower or "route" in stage_lower or "前置" in stage_name:
+            return "前置路由"
+        elif "chat" in stage_lower or "start_to_chat" in stage_lower or "对话" in stage_name:
+            return "对话流程"
+        elif "vad" in stage_lower or "voice" in stage_lower or "语音检测" in stage_name:
+            return "语音检测(VAD)"
+        elif "ASR" in stage_name or "asr" in stage_name or "语音识别" in stage_name:
             return "语音识别(ASR)"
         elif "LLM" in stage_name or "llm" in stage_name or "大模型" in stage_name or "推理" in stage_name:
             return "大模型(LLM)"
@@ -469,18 +496,22 @@ class LatencyMonitor:
 
 # 全局监控实例
 _latency_monitor: Optional[LatencyMonitor] = None
+_latency_monitor_lock = threading.Lock()
 
 
 def get_monitor() -> LatencyMonitor:
     """获取全局监控实例"""
     global _latency_monitor
     if _latency_monitor is None:
-        _latency_monitor = LatencyMonitor()
+        with _latency_monitor_lock:
+            if _latency_monitor is None:
+                _latency_monitor = LatencyMonitor()
     return _latency_monitor
 
 
 def init_monitor(tmp_dir: str = "/tmp") -> LatencyMonitor:
     """初始化全局监控实例"""
     global _latency_monitor
-    _latency_monitor = LatencyMonitor(tmp_dir=tmp_dir)
+    with _latency_monitor_lock:
+        _latency_monitor = LatencyMonitor(tmp_dir=tmp_dir)
     return _latency_monitor

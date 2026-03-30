@@ -84,10 +84,11 @@ class ASRProviderBase(ABC):
     # 处理语音停止
     async def handle_voice_stop(self, conn: "ConnectionHandler", asr_audio_task: List[bytes]):
         """并行处理ASR和声纹识别"""
+        active_turn_id = getattr(conn, "turn_id", "unknown")
         try:
             # 记录ASR耗时
             monitor = get_monitor()
-            monitor.set_turn_id(getattr(conn, "sentence_id", "unknown"))
+            monitor.set_turn_id(active_turn_id)
             monitor.start_timer(conn.session_id, "ASR处理")
             
             total_start_time = time.monotonic()
@@ -173,7 +174,7 @@ class ASRProviderBase(ABC):
             monitor.end_timer(
                 conn.session_id,
                 "ASR处理",
-                getattr(conn, "sentence_id", "unknown"),
+                active_turn_id,
                 details="语音识别",
             )
 
@@ -194,7 +195,7 @@ class ASRProviderBase(ABC):
                 monitor.end_timer(
                     conn.session_id,
                     "ASR处理",
-                    getattr(conn, "sentence_id", "unknown"),
+                    active_turn_id,
                     details="语音识别",
                 )
             except:

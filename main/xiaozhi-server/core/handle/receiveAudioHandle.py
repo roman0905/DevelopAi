@@ -11,7 +11,7 @@ from core.handle.intentHandler import handle_user_intent
 from core.handle.prefilterHandler import try_prefilter_route
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_stt_message, SentenceType
-from core.utils.latency_trace import mark_stage
+from core.utils.latency_trace import begin_turn, mark_stage, start_stage, end_stage
 
 TAG = __name__
 
@@ -43,7 +43,8 @@ async def resume_vad_detection(conn: "ConnectionHandler"):
 
 
 async def startToChat(conn: "ConnectionHandler", text):
-    mark_stage(conn, "start_to_chat.enter")
+    turn_id = begin_turn(conn, text, source="start_to_chat", force_new=True)
+    mark_stage(conn, "start_to_chat.enter", module="对话流程")
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     language_tag = None
@@ -87,16 +88,28 @@ async def startToChat(conn: "ConnectionHandler", text):
         await handleAbortMessage(conn)
 
     # 在常规意图识别前先尝试前置工具路由（如血糖查询）
-    mark_stage(conn, "prefilter.enter")
-    if await try_prefilter_route(conn, actual_text):
-        mark_stage(conn, "prefilter.routed")
+    mark_stage(conn, "prefilter.enter", module="前置路由")
+    prefilter_routed = False
+    start_stage(conn, "prefilter.route")
+    try:
+        prefilter_routed = await try_prefilter_route(conn, actual_text)
+    finally:
+        end_stage(
+            conn,
+            "prefilter.route",
+            turn_id=turn_id,
+            details=f"routed={prefilter_routed}",
+        )
+
+    if prefilter_routed:
+        mark_stage(conn, "prefilter.routed", module="前置路由")
         return
-    mark_stage(conn, "prefilter.miss")
+    mark_stage(conn, "prefilter.miss", module="前置路由")
 
     # 首先进行意图分析，使用实际文本内容
-    mark_stage(conn, "intent.analyze.start")
+    mark_stage(conn, "intent.analyze.start", module="意图识别")
     intent_handled = await handle_user_intent(conn, actual_text)
-    mark_stage(conn, "intent.analyze.end", handled=bool(intent_handled))
+    mark_stage(conn, "intent.analyze.end", module="意图识别", handled=bool(intent_handled))
 
     if intent_handled:
         # 如果意图已被处理，不再进行聊天
@@ -104,8 +117,8 @@ async def startToChat(conn: "ConnectionHandler", text):
 
     # 意图未被处理，继续常规聊天流程，使用实际文本内容
     await send_stt_message(conn, actual_text)
-    mark_stage(conn, "stt.sent")
-    mark_stage(conn, "chat.submit")
+    mark_stage(conn, "stt.sent", module="输入接收")
+    mark_stage(conn, "chat.submit", module="对话流程")
     conn.executor.submit(conn.chat, actual_text)
 
 

@@ -140,9 +140,11 @@ class UnifiedToolHandler:
         self, conn, function_call_data: Dict[str, Any]
     ) -> Optional[ActionResponse]:
         """处理LLM函数调用"""
+        active_turn_id = function_call_data.get("turn_id") or getattr(conn, "turn_id", "unknown")
         try:
             # 记录工具调用耗时
             monitor = get_monitor()
+            monitor.set_turn_id(active_turn_id)
             tool_name = function_call_data.get("name", "unknown")
             monitor.start_timer(conn.session_id, f"工具调用: {tool_name}")
             
@@ -181,7 +183,7 @@ class UnifiedToolHandler:
             monitor.end_timer(
                 conn.session_id,
                 f"工具调用: {tool_name}",
-                getattr(conn, "sentence_id", "unknown"),
+                active_turn_id,
                 details=tool_name,
             )
             return result
@@ -195,7 +197,7 @@ class UnifiedToolHandler:
                 monitor.end_timer(
                     conn.session_id,
                     f"工具调用: {tool_name}",
-                    getattr(conn, "sentence_id", "unknown"),
+                    active_turn_id,
                     details=tool_name,
                 )
             except:
