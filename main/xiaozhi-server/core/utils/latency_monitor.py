@@ -374,6 +374,22 @@ class LatencyMonitor:
         
         return summaries
 
+    def _get_turn_ids_by_timestamp(self) -> List[str]:
+        """按每个turn首个事件时间戳排序，确保报告按时间线输出。"""
+        turn_order = []
+        for turn_id, events in self.turn_events.items():
+            if events:
+                first_timestamp = min(
+                    (event.get("timestamp", "") for event in events),
+                    default="",
+                )
+            else:
+                first_timestamp = ""
+            turn_order.append((first_timestamp, turn_id))
+
+        turn_order.sort(key=lambda item: (item[0], item[1]))
+        return [turn_id for _, turn_id in turn_order]
+
     def _save_markdown_report(self, summary: Dict) -> None:
         """生成Markdown格式的报告"""
         filepath = os.path.join(self.tmp_dir, "latency_summary.md")
@@ -403,8 +419,10 @@ class LatencyMonitor:
             # 按turn统计
             if summary["turn_summaries"]:
                 f.write("\n## 按对话轮次统计\n\n")
-                
-                for turn_id in sorted(summary["turn_summaries"].keys()):
+
+                for turn_id in self._get_turn_ids_by_timestamp():
+                    if turn_id not in summary["turn_summaries"]:
+                        continue
                     turn_data = summary["turn_summaries"][turn_id]
                     f.write(f"\n### Turn {turn_id}\n\n")
                     f.write("| 模块 | 耗时(秒) | 调用次数 | 平均耗时(秒) |\n")

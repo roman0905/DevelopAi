@@ -9,6 +9,11 @@ from datetime import datetime, timedelta
 TAG = __name__
 logger = setup_logging()
 
+
+def _mask_phone(phone: str) -> str:
+    """手机号脱敏，统一用于所有日志输出。"""
+    return f"{phone[:3]}****{phone[-4:]}" if phone and len(phone) >= 7 else "***"
+
 # 更新函数描述，让LLM知道它能拿到的实际数据指标（新接口仅包含血糖值）
 GET_GLUCOSE_FUNCTION_DESC = {
     "type": "function",
@@ -121,15 +126,19 @@ def parse_time_range_to_minutes(time_range_str):
             elif i in [1, 4]: return int(value * 60)
             elif i in [2, 5]: return int(value * 24 * 60)
 
+    # 兜底：仅当包含明确单位关键词时才按单位解析，否则使用默认值
     number_match = re.search(r'(\d+)', time_range_str)
     if number_match:
         number = int(number_match.group(1))
-        if number <= 60:
-            return number * 60 if "时" in time_range_str or "hour" in time_range_str else number
-        elif number <= 24:
+        if "时" in time_range_str or "hour" in time_range_str:
             return number * 60
-        else:
+        if "分" in time_range_str or "min" in time_range_str:
             return number
+        if "天" in time_range_str or "日" in time_range_str or "day" in time_range_str:
+            return number * 24 * 60
+        # 无单位的纯数字输入，回退默认值
+        logger.warning(f"时间范围含纯数字但无单位: {time_range_str}，使用默认值15分钟")
+        return 15
 
     logger.warning(f"无法解析时间范围: {time_range_str}，使用默认值15分钟")
     return 15
@@ -146,13 +155,18 @@ def fetch_stomed_data(phone_number, start_time=None, end_time=None, minutes=15):
 
         if sensor_data is None:
             url = f"http://pre-api.stomed.cn/api/sensor/sensor/readings?phoneNumber={phone_number}"
-            logger.info(f"请求传感器数据 - 手机号: {phone_number}")
-            res = requests.get(url, headers=HEADERS, timeout=10).json()
+            logger.info(f"请求传感器数据 - 手机号: {_mask_phone(phone_number)}")
+            resp = requests.get(url, headers=HEADERS, timeout=10)
+            resp.raise_for_status()
+            res = resp.json()
             sensor_data = res.get("readings", [])
             if sensor_data and isinstance(sensor_data, list):
                 cache_manager.set(CacheType.GLUCOSE, cache_key, sensor_data)
+            else:
+                # 空结果也缓存（短 TTL），避免短时间内重复请求后端 API
+                cache_manager.set(CacheType.GLUCOSE, cache_key, [], ttl=30)
         else:
-            logger.info(f"命中血糖数据缓存 - 手机号: {phone_number[:3]}****{phone_number[-4:]}")
+            logger.info(f"命中血糖数据缓存 - 手机号: {_mask_phone(phone_number)}")
 
         if not sensor_data or not isinstance(sensor_data, list):
             return None, "传感器暂无数据上报。"
@@ -252,9 +266,10 @@ def get_glucose_data(conn, phone_number: str = None, minutes: int = None,
     """
     获取用户的血糖真实佩戴数据
     """
-    # 手机号优先级：LLM提取 > 设备headers
+    # 手机号优先级：LLM显式传入 > 设备headers（兼容 phone_number 和 phoneNumber）
+    headers = conn.headers or {}
     if not phone_number:
-        phone_number = conn.headers.get("phone_number")
+        phone_number = headers.get("phone_number") or headers.get("phoneNumber")
     # 如果仍然没有手机号，要求用户提供
     if not phone_number:
         return ActionResponse(
@@ -271,17 +286,8 @@ def get_glucose_data(conn, phone_number: str = None, minutes: int = None,
             None
         )
 
-    # 手机号解析成功后，将其写回 prefilter 血糖上下文，
-    # 这样无论本次调用来自 LLM 还是 prefilter，后续追问都能复用手机号
-    try:
-        from core.handle.prefilterHandler import _remember_glucose_context
-        _remember_glucose_context(conn, phone_number)
-    except Exception:
-        pass
-
-    device_id = conn.headers.get("device-id")
-    logger.info(f"设备 {device_id} 请求真实佩戴数据，手机号: {phone_number[:3]}****{phone_number[-4:]}")
-    
+    device_id = headers.get("device-id")
+    logger.info(f"设备 {device_id} 请求真实佩戴数据，手机号: {_mask_phone(phone_number)}")    
     # 智能解析时间范围
     final_minutes = 15  # 默认值
     if start_time and end_time:

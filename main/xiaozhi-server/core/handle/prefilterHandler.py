@@ -12,6 +12,7 @@ from core.handle.intentHandler import speak_txt
 from core.handle.sendAudioHandle import send_stt_message
 from core.providers.tts.dto.dto import ContentType, SentenceType, TTSMessageDTO
 from core.utils.dialogue import Message
+from core.utils.latency_trace import start_stage, end_stage
 from plugins_func.register import Action
 
 TAG = __name__
@@ -138,38 +139,82 @@ def _build_tool_args(conn: "ConnectionHandler", text: str) -> dict[str, Any]:
     return args
 
 
-def _extract_latest_glucose_snapshot(tool_text: str) -> dict[str, Optional[str]]:
-    snapshot = {"value": None, "time": None}
-
+def _extract_glucose_report_data(tool_text: str) -> dict[str, Optional[str]]:
+    """从工具返回的文本报告中提取结构化数据，包括统计信息、最新读数和时间范围。"""
+    data: dict[str, Optional[str]] = {
+        "value": None, "time": None,
+        "avg": None, "max": None, "min": None,
+        "time_desc": None, "count": None,
+    }
+    header_match = re.search(r"（(最近[^，]+)，共找到\s*(\d+)\s*条记录）", tool_text)
+    if header_match:
+        data["time_desc"] = header_match.group(1)
+        data["count"] = header_match.group(2)
+    avg_match = re.search(r"平均血糖:\s*([0-9.]+)\s*mmol/L", tool_text)
+    if avg_match:
+        data["avg"] = avg_match.group(1)
+    max_match = re.search(r"最高血糖:\s*([0-9.]+)\s*mmol/L", tool_text)
+    if max_match:
+        data["max"] = max_match.group(1)
+    min_match = re.search(r"最低血糖:\s*([0-9.]+)\s*mmol/L", tool_text)
+    if min_match:
+        data["min"] = min_match.group(1)
     time_match = re.search(r"最新的一条传感器数据状态（时间：([^）]+)）", tool_text)
     if time_match:
-        snapshot["time"] = time_match.group(1)
-
+        data["time"] = time_match.group(1)
     value_match = re.search(r"血糖值\s*\(value\):\s*([0-9.]+)\s*mmol/L", tool_text)
     if value_match:
-        snapshot["value"] = value_match.group(1)
-
-    return snapshot
+        data["value"] = value_match.group(1)
+    return data
 
 
 def _build_quick_glucose_reply(tool_text: str) -> Optional[str]:
-    snapshot = _extract_latest_glucose_snapshot(tool_text)
-    value = snapshot.get("value")
+    """
+    快速回复仅包含数据摘要（时间范围、统计、最新读数+时间），不含建议。
+    建议的职责完全交给后续 LLM 回复。
+    """
+    data = _extract_glucose_report_data(tool_text)
+    value = data.get("value")
     if not value:
         return None
-    return f"你最近一条血糖数据是 {value} mmol/L。"
+
+    parts: list[str] = []
+    # ① 时间范围 + 记录数
+    if data.get("time_desc") and data.get("count"):
+        parts.append(f"{data['time_desc']}共{data['count']}条记录")
+    # ② 统计摘要
+    if data.get("avg") and data.get("max") and data.get("min"):
+        parts.append(f"平均血糖{data['avg']}，最高{data['max']}，最低{data['min']}")
+    # ③ 最新读数 + 时间
+    if data.get("time"):
+        parts.append(f"最新一条是{data['time']}的{value} mmol/L")
+    else:
+        parts.append(f"最新血糖{value} mmol/L")
+
+    return "，".join(parts) + "。"
+
+
+_LLM_GLUCOSE_CONSTRAINTS = (
+    "严格限制：\n"
+    "1. 只针对血糖数据本身给出1-2条简短的饮食或监测建议。\n"
+    "2. 禁止提及天气、新闻、运动打卡、心情等与血糖无关的话题。\n"
+    "3. 不要重复报数值、统计信息或时间。\n"
+    "4. 不要使用标题、序号、Markdown 或分段符号。\n"
+    "5. 总字数不超过50字，用自然口语表达。"
+)
 
 
 def _build_tool_context(tool_text: str, quick_reply_sent: bool) -> str:
     if quick_reply_sent:
         return (
             f"{tool_text}\n\n"
-            "补充要求：用户已经听到了最新一条血糖值。"
-            "请直接给出2条简短建议，不要重复报血糖数值。"
+            "补充要求：用户已经听到了完整的数据摘要（时间范围、记录数、平均/最高/最低血糖、最新一条读数及时间）。\n"
+            f"{_LLM_GLUCOSE_CONSTRAINTS}"
         )
     return (
         f"{tool_text}\n\n"
-        "补充要求：请先用一句话给出结论，再给出2条简短建议。"
+        "补充要求：请先用一句话总结血糖情况，再给出1-2条简短建议。\n"
+        f"{_LLM_GLUCOSE_CONSTRAINTS}"
     )
 
 
@@ -185,15 +230,14 @@ def _build_fallback_advice(
     if quick_reply_sent:
         system_prompt = (
             f"{tool_text}\n\n"
-            "用户已经听到了最新一条血糖值。"
-            "请直接给出2条简短建议，不要重复报血糖数值。"
-            "不要使用标题、序号或 Markdown。总字数不超过50字。"
+            "用户已经听到了完整的数据摘要（时间范围、记录数、平均/最高/最低血糖、最新读数及时间）。\n"
+            f"{_LLM_GLUCOSE_CONSTRAINTS}"
         )
     else:
         system_prompt = (
             f"{tool_text}\n\n"
-            "请先给出一句简短结论，再给出2条简短建议。"
-            "不要使用标题、序号或 Markdown。总字数不超过60字。"
+            "请先用一句话总结血糖情况，再给出1-2条简短建议。\n"
+            f"{_LLM_GLUCOSE_CONSTRAINTS}"
         )
 
     try:
@@ -303,15 +347,20 @@ async def try_prefilter_route(conn: "ConnectionHandler", text: str) -> bool:
     }
 
     def process_glucose_query() -> None:
+        start_stage(conn, "glucose_tool_call")
         try:
             result = asyncio.run_coroutine_threadsafe(
                 conn.func_handler.handle_llm_function_call(conn, function_call_data),
                 conn.loop,
             ).result(timeout=15)
         except Exception as exc:
+            end_stage(conn, "glucose_tool_call", details=f"failed: {exc}")
             conn.logger.bind(tag=TAG).error(f"血糖工具调用失败，回退主链路: {exc}")
             conn.executor.submit(conn.chat, plain)
             return
+
+        tool_elapsed = end_stage(conn, "glucose_tool_call", details="success")
+        conn.logger.bind(tag=TAG).info(f"血糖工具调用完成，耗时: {tool_elapsed:.2f}s")
 
         if not result:
             conn.executor.submit(conn.chat, plain)
