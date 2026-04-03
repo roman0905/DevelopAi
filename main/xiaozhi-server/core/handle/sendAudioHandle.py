@@ -9,6 +9,7 @@ from core.utils import textUtils
 from core.utils.util import audio_to_data
 from core.providers.tts.dto.dto import SentenceType
 from core.utils.audioRateController import AudioRateController
+from core.utils.latency_trace import end_stage
 
 TAG = __name__
 # 音频帧时长（毫秒）
@@ -18,9 +19,15 @@ PRE_BUFFER_COUNT = 5
 
 
 async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text):
-    if conn.tts.tts_audio_first_sentence:
+    # 使用 turn_id 来判断当前轮次是否已经记录过首段音频，避免跨轮次计时串位。
+    # 原先依赖 tts_audio_first_sentence 标志位，但该标志由 TTS 文本线程异步重置，
+    # 与 start_stage("端到端首段音频") 的调用时机不同步，导致多轮测试时计时结果错误。
+    current_turn_id = getattr(conn, "turn_id", None)
+    first_audio_recorded_turn = getattr(conn, "_first_audio_recorded_turn_id", None)
+    if current_turn_id and current_turn_id != first_audio_recorded_turn:
         conn.logger.bind(tag=TAG).info(f"发送第一段语音: {text}")
-        conn.tts.tts_audio_first_sentence = False
+        conn._first_audio_recorded_turn_id = current_turn_id
+        end_stage(conn, "端到端首段音频", turn_id=current_turn_id, details="首段音频发送完成")
 
     if sentenceType == SentenceType.FIRST:
         # 同一句子的后续消息加入流控队列，其他情况立即发送

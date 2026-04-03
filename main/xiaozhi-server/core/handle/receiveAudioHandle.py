@@ -45,6 +45,7 @@ async def resume_vad_detection(conn: "ConnectionHandler"):
 async def startToChat(conn: "ConnectionHandler", text):
     turn_id = begin_turn(conn, text, source="start_to_chat", force_new=True)
     mark_stage(conn, "start_to_chat.enter", module="对话流程")
+    start_stage(conn, "端到端首段音频")
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     language_tag = None
